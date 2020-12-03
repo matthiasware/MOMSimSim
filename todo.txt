@@ -1,0 +1,8 @@
+- Seems like the model collapses:
+	- add curves like Fig.2 in SimSiam
+	- check for collapse 
+	- add knn classifier [36] during and after training
+- add multi gpu support
+- implement warmup & add lars
+- different scale parameters in last BN layers for every residual block
+- parametrize augmentations and add to config
