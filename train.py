@@ -4,6 +4,7 @@ import pprint
 #
 import configs
 
+import numpy as np
 import torch
 from torchvision.models import resnet50
 from tqdm import tqdm
@@ -14,17 +15,21 @@ from augmentations import get_aug
 from dotted_dict import DottedDict
 import datetime
 from torch.utils.tensorboard import SummaryWriter
+from sklearn.neighbors import KNeighborsClassifier
 
-debug = False
-dataset = "cifar10"
+DEBUG = False
+DEVICE = "cuda:1"
+DATASET = "cifar10"
 
-config = configs.get_config(dataset)
+config = configs.get_config(dataset=DATASET,
+                            train=True,
+                            debug=DEBUG,
+                            device=DEVICE)
 
 
 pp = pprint.PrettyPrinter(indent=2)
 
 pp.pprint(config)
-
 
 # prepare data
 train_transform = get_aug(img_size=config.img_size,
@@ -33,17 +38,14 @@ train_transform = get_aug(img_size=config.img_size,
                           means_std=config.mean_std)
 
 classifier_transform = get_aug(img_size=config.img_size,
-                               train=True,
+                               train=False,
                                train_classifier=True,
                                means_std=config.mean_std)
 #
 train_set = get_dataset(config.dataset, config.p_data,
                         train=True, transform=train_transform)
 classifier_set = get_dataset(config.dataset, config.p_data,
-                             train=True, transform=classifier_transform)
-if config.debug:
-    # take only one batch
-    train_set = torch.utils.data.Subset(train_set, range(0, config.batch_size))
+                             train=False, transform=classifier_transform)
 #
 train_loader = torch.utils.data.DataLoader(
     dataset=train_set,
@@ -67,6 +69,8 @@ classifier_loader = torch.utils.data.DataLoader(
 backbone = get_backbone(config.backbone)
 model = SimSiam(backbone, config.projector_args, config.predictor_args)
 model = model.to(config.device)
+
+print(model)
 
 optimizer = get_optimizer(config.optimizer, model, config.optimizer_args)
 
@@ -105,8 +109,9 @@ for epoch in range(1, config.num_epochs + 1):
                           epoch * len(train_loader) + idx)
         writer.add_scalar('avg_loss', loss_meter.avg,
                           epoch * len(train_loader) + idx)
-        p_bar.set_postfix({"loss": loss_meter.val, 'loss_avg': loss_meter.avg})
+        p_bar.set_postfix({"loss": loss_meter.val, 'loss_avg': loss_meter.avg, 'lr': lr_scheduler.get_last_lr()[0]})
 
+    writer.add_scalar('epoch_avg', loss_meter.avg, epoch)
     lr_scheduler.step()
 
     # Save checkpoint
@@ -123,8 +128,28 @@ for epoch in range(1, config.num_epochs + 1):
     #
     # CLASSIFIER LOOP
     #
-    if config.freq_classify % epoch == 0:
+    if epoch % config.freq_knn == 0:
         model.eval()
-        p_bar = tqdm(classifier_loader, desc=f'Epoch {epoch}/{config.num_epochs}')
-        for idx, (images labels) in enumerate(p_bar):
-            z = model.encoder(images)
+        all_projections = []
+        all_labels = []
+        for images, labels in classifier_loader:
+            with torch.no_grad():
+                z = model.encoder(images.to(config.device))
+                all_projections.append(z.cpu().numpy())
+                all_labels.append(labels.cpu().numpy())
+        all_labels = np.concatenate(all_labels)
+        all_projections = np.concatenate(all_projections)
+        
+        # knn 
+        neigh = KNeighborsClassifier(n_neighbors=5, algorithm='brute', n_jobs=8)
+        neigh.fit(all_projections, all_labels)
+        score = neigh.score(all_projections, all_labels)
+        writer.add_scalar('knn_acc', score, epoch)
+
+        # std
+        # ideally around 1/np.sqrt(d)
+        norms = np.linalg.norm(all_projections, axis=1)
+        z_bars = all_projections / norms[:, None]
+        std = z_bars.std(axis=0).mean()
+
+        writer.add_scalar('std', std, epoch)

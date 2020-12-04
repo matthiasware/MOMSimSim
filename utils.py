@@ -1,6 +1,7 @@
 import torchvision
 from torchvision.models import resnet50, resnet18, vgg16
 import torch
+import torch.nn as nn
 
 class AverageMeter():
     """Computes and stores the average and current value"""
@@ -30,7 +31,7 @@ class AverageMeter():
         fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
         return fmtstr.format(**self.__dict__)
 
-    
+
 def get_dataset(dataset, data_dir, transform, train=True, download=False):
     if dataset == 'mnist':
         dataset = torchvision.datasets.MNIST(data_dir, train=train,
@@ -54,13 +55,22 @@ def get_dataset(dataset, data_dir, transform, train=True, download=False):
         raise Exception("Dataset {} does not exist!".format(dataset))
     return dataset
 
+
 def get_backbone(backbone:str):
     if backbone == "resnet50":
-        return resnet50()
+        model = resnet50()
+        out_dim = model.fc.in_features
+        model = nn.Sequential(*list(model.children())[:-1])
+        model.out_dim = out_dim
+        return model
     elif backbone == "resnet18":
-        return resnet18()
-    elif backbone == "vgg16":
-        return vgg16()
+        model = resnet18()
+        out_dim = model.fc.in_features
+        model = nn.Sequential(*list(model.children())[:-1])
+        model.out_dim = out_dim
+        return model
+    # elif backbone == "vgg16":
+        # return vgg16()
     else:
         raise Exception(f"Backbone '{backbone}' does not exist!")
 
@@ -73,7 +83,7 @@ def get_optimizer(optimizer:str, model, optimizer_args):
     else:
         raise Exception(f"Optimizer '{optimizer}' does not exist!")
 
-        
+
 def get_scheduler(scheduler:str, optimizer, scheduler_args):
     if scheduler == "cosine_decay":
         return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, **scheduler_args)

@@ -6,3 +6,4 @@
 - implement warmup & add lars
 - different scale parameters in last BN layers for every residual block
 - parametrize augmentations and add to config
+- test for each dataset, (e.g. STL10 is different as we do not have that many labels)

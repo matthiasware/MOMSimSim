@@ -8,11 +8,12 @@ import torch
 def add_paths(config, debug=False):
     # unique identifier for run
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    if debug:
-        timestamp = "tmp"
     fs_run = "run_{}_{}_{}".format(config.dataset, config.backbone, timestamp)
     config.p_data = Path("/mnt/data/pytorch")
-    config.p_train = Path("/mnt/experiments/simsiam") / fs_run
+    if debug:
+        config.p_train = Path("/mnt/experiments/tmp") / fs_run
+    else:
+        config.p_train = Path("/mnt/experiments/simsiam") / fs_run
     config.p_ckpts = config.p_train / "ckpts"
     config.p_logs = config.p_train / "logs"
     return config
@@ -57,7 +58,7 @@ def simsiam_default(debug=False):
     #
     # Frequencies (epochs)
     #
-    config.freq_classify = 1
+    config.freq_knn = 1
     #
     # debug settings
     if config.debug:
@@ -71,14 +72,21 @@ def simsiam_default(debug=False):
 def linear_default(debug=False):
     config = DottedDict()
     config.optimizer = "sgd"
+    config.device = 'cuda:1' if torch.cuda.is_available() else 'cpu'
     config.batch_size = 256
-    config.base_lr = 30.0,
+    config.base_lr = 0.5
+    config.num_workers = 8
+    config.num_epochs = 100
     config.optimizer_args = {
         "lr": config.base_lr,
-        "weight_decay": 0,  # used always
+        "weight_decay": 5e-4,  # adapted, paper says 0
         "momentum": 0.9
     }
-    config.scheduler = None
+    config.scheduler = "cosine_decay"
+    config.scheduler_args = {
+        "T_max": config.num_epochs,
+        "eta_min": 0
+    }
     return config
 
 
@@ -86,11 +94,16 @@ def simsiam_imagenet(debug=False):
     return simsiam_default(debug)
 
 
+def linear_cifar10(debug=False):
+    return linear_default()
+
+
 def simsiam_cifar10(debug=False):
     config = simsiam_default(debug)
     config.backbone = "resnet18"
     config.dataset = "cifar10"
     config.batch_size = 512
+    config.num_epochs = 800
     config.base_lr = 0.03
     config.optimizer = "sgd"
     config.optimizer_args = {
@@ -108,10 +121,16 @@ def simsiam_cifar10(debug=False):
     return config
 
 
-def get_config(dataset):
+def get_config(dataset, train=True, debug=False, device=None):
     if dataset == "cifar10":
-        config = simsiam_cifar10()
+        if train:
+            config = simsiam_cifar10()
+        else:
+            config = linear_cifar10()
     elif dataset == "imagenet":
         config == simsiam_imagenet()
-    config = add_paths(config)
+    if train:
+        config = add_paths(config, debug)
+    if device:
+        config.device = device
     return config

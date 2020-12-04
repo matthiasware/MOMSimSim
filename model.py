@@ -27,6 +27,10 @@ class projection_MLP(nn.Module):
             put fc. Its output fc has no ReLU. The hidden fc is 2048-d. 
             This MLP has 3 layers.
         '''
+        self.in_dim = in_dim
+        self.hidden_dim = hidden_dim
+        self.out_dim = out_dim
+        self.n_hidden_layers = n_hidden_layers
 
         # INPUT LAYER
         self.layer_in = nn.Sequential(
@@ -36,14 +40,17 @@ class projection_MLP(nn.Module):
         )
 
         # HIDDEN LAYERS
-        layers_hidden = []
-        for _ in range(n_hidden_layers):
-            layer = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.BatchNorm1d(hidden_dim),
-                nn.ReLU(inplace=True))
-            layers_hidden.append(layer)
-        self.layers_hidden = nn.Sequential(*layers_hidden)
+        if n_hidden_layers > 0:
+            layers_hidden = []
+            for _ in range(n_hidden_layers):
+                layer = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.ReLU(inplace=True))
+                layers_hidden.append(layer)
+            self.layers_hidden = nn.Sequential(*layers_hidden)
+        else:
+            self.layers_hidden = None
 
         # OUTPUT LAYERS, NO RELU!
         self.layer_out = nn.Sequential(
@@ -54,9 +61,10 @@ class projection_MLP(nn.Module):
     def forward(self, x):
         # using x.squeeze() will break the program when batch size is 1
         # x.shape [4, 2048, 1, 1] -> [4, 2048]
-        # x = self.layer_in(x.squeeze(dim=-1).squeeze(dim=-1))
-        x = self.layer_in(x)
-        x = self.layers_hidden(x)
+        x = self.layer_in(x.squeeze(dim=-1).squeeze(dim=-1))
+        #x = self.layer_in(x)
+        if self.layers_hidden is not None:
+            x = self.layers_hidden(x)
         x = self.layer_out(x)
         return x
 
@@ -72,6 +80,9 @@ class prediction_MLP(nn.Module):
         and h’s hidden layer’s dimension is 512, making h a 
         bottleneck structure (ablation in supplement). 
         '''
+        self.in_dim = in_dim
+        self.hidden_dim = hidden_dim
+        self.out_dim = out_dim
         self.layer1 = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
@@ -93,17 +104,17 @@ class prediction_MLP(nn.Module):
 class SimSiam(nn.Module):
     def __init__(self, backbone, projector_args, predictor_args):
         super().__init__()
-        self.projector = projection_MLP(backbone.fc.in_features,
-                                        **projector_args)
 
-        # cut output transform as it is ImageNet specific
-        backbone.fc = nn.Identity()
+        self.backbone_out = backbone.out_dim
         self.backbone = backbone
+        self.projector = projection_MLP(backbone.out_dim,
+                                        **projector_args)
+        self.predictor = prediction_MLP(**predictor_args)
+
         self.encoder = nn.Sequential(  # f encoder
             self.backbone,
             self.projector
         )
-        self.predictor = prediction_MLP(**predictor_args)
 
     def forward(self, x1, x2):
         # x1, x2 are augmented
@@ -112,3 +123,34 @@ class SimSiam(nn.Module):
         p1, p2 = h(z1), h(z2)   # prediction
         L = 0.5 * D(p1, z2) + 0.5 * D(p2, z1)  # loss
         return L
+
+
+class DownStreamClassifier(nn.Module):
+    def __init__(self, simsiam, proj_out=2048, hidden=512, n_classes=10):
+        super().__init__()
+
+        self.backbone = nn.Sequential(
+            simsiam.backbone,
+        )
+        for name, param in self.backbone.named_parameters():
+            param.requires_grad = False
+
+        self.projector = nn.Sequential(
+            simsiam.projector
+        )
+        for name, param in self.projector.named_parameters():
+            param.requires_grad = False
+
+        self.out = nn.Sequential(
+            nn.Linear(proj_out, hidden),
+            nn.BatchNorm1d(hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, n_classes),
+        )
+
+    def forward(self, x):
+        out = self.backbone(x).squeeze()
+        out = self.projector(out)
+        out = self.out(out)
+
+        return out
